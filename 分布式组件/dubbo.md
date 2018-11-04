@@ -2,7 +2,7 @@
 
 如下图所示，包含注册中心，监控中心，服务消费方，服务提供方四大组件
 
-![](E:\note\分布式组件\dubbo架构.bmp)
+![](dubbo架构.bmp)
 
 其中服务消费方和注册中心利用zookeeper订阅，通知订阅更新的一个机制实现了服务的发现
 
@@ -10,7 +10,7 @@ consumer和provider通过invoker机制通过netty进行nio通信。
 
 #### 2、dubbo案例演示
 
-![](E:\note\分布式组件\dubbo常用案例演示图.png)
+![](dubbo常用案例演示图.png)
 
 这里介绍了dubbo的一个常用案例，一般是服务提供方(dubbo-server)将server-api发布到私有库，
 
@@ -256,7 +256,7 @@ consumer和provider通过invoker机制通过netty进行nio通信。
 
   2. 配置spi文件
 
-     ![调用](E:\note\分布式组件\dubbo-spi.bmp)
+     ![](dubbo-spi.bmp)
 
   3. 调用
 

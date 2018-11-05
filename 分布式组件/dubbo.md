@@ -196,8 +196,6 @@ consumer和provider通过invoker机制通过netty进行nio通信。
       </dubbo:reference>
   ```
 
-  
-
 - 配置的有限级别
 
   - 总体规则 消费方优先于服务方
@@ -280,15 +278,13 @@ consumer和provider通过invoker机制通过netty进行nio通信。
                     ExtensionLoader.getExtensionLoader(Protocol.class).getAdaptiveExtension();
     ```
 
-    
+
 
     - 这段代码可以分为两个阶段去解读
 
       - 第一个阶段 `ExtensionLoader.getExtensionLoader(Protocol.class)`这里根据传入的类型获取了一个`ExtensionLoder` 类似于工厂模式
 
       - 第二个阶段 根据`ExtensionLoder.getAdaptiveExtension()`获取一个自适应的扩展点。
-
-        
 
   - 第一阶段 `ExtensionLoader.getExtensionLoader(Protocol.class)`方法源码如下
 
@@ -307,6 +303,8 @@ consumer和provider通过invoker机制通过netty进行nio通信。
             ExtensionLoader<T> loader = (ExtensionLoader<T>) EXTENSION_LOADERS.get(type);
             //如果获取不到手动创建一个ExtensionLoader并且放入缓存
         	if (loader == null) {
+                //这里在获取ExtensionLoader的过程中 对objectFactory属性进行了赋值
+                //赋值逻辑为objectFactory = (type == ExtensionFactory.class ? null : //ExtensionLoader.getExtensionLoader(ExtensionFactory.class).getAdaptiveExtensio//n()); 这里获取的是一个自定义的扩展点  //AdaptiveExtensionFactory
                 EXTENSION_LOADERS.putIfAbsent(type, new ExtensionLoader<T>(type));
                 loader = (ExtensionLoader<T>) EXTENSION_LOADERS.get(type);
             }
@@ -323,8 +321,6 @@ consumer和provider通过invoker机制通过netty进行nio通信。
     ```
 
     可以看出这个缓存是key为传入的Class value为对应的 ExtensionLoader，这里还可以看出在dubbo中每一个扩展点都会对应一个ExtensionLoder。
-
-    
 
   - 第二阶段`ExtensionLoder.getAdaptiveExtension()`方法如下
 
@@ -369,6 +365,8 @@ consumer和provider通过invoker机制通过netty进行nio通信。
                 //看方法名称的意思是依赖注入了一个自适应扩展点的实例
                 //内层getAdaptiveExtensionClass()这个方法获取了一个自适应扩展点的class
                 //下面就getAdaptiveExtensionClass()这个方法进行分析
+                //private final ExtensionFactory objectFactory;
+                //具体依赖注入的原则是首先获得该实例set开头的方法，从ObjectFactory中查找对应的对			    //象并进行注入
                 return injectExtension((T) getAdaptiveExtensionClass().newInstance());
             } catch (Exception e) {
                 throw new IllegalStateException("Can not create adaptive extension " + type + ", cause: " + e.getMessage(), e);
@@ -376,7 +374,7 @@ consumer和provider通过invoker机制通过netty进行nio通信。
         }
     ```
 
-    
+
 
     `getAdaptiveExtensionClass()`方法内容如下
 
@@ -415,6 +413,7 @@ consumer和provider通过invoker机制通过netty进行nio通信。
             }
     
             Map<String, Class<?>> extensionClasses = new HashMap<String, Class<?>>();
+        	//2.6.2中将2.5.4中的loadFile方法拆分了 
             loadDirectory(extensionClasses, DUBBO_INTERNAL_DIRECTORY);
             loadDirectory(extensionClasses, DUBBO_DIRECTORY);
             loadDirectory(extensionClasses, SERVICES_DIRECTORY);
@@ -422,6 +421,169 @@ consumer和provider通过invoker机制通过netty进行nio通信。
         }
     ```
 
-    
+    下面分析一下`loadDirectory`方法，其方法内容如下
 
+    ```java
+    //私有方法
+        private void loadDirectory(Map<String, Class<?>> extensionClasses, String dir) {
+            //这里filename 形如META-INF/services/com.alibaba.dubbo.rpc.Protocol
+            String fileName = dir + type.getName();
+            try {
+                Enumeration<java.net.URL> urls;
+                ClassLoader classLoader = findClassLoader();
+                //根据fileName加载urls值
+                if (classLoader != null) {
+                    urls = classLoader.getResources(fileName);
+                } else {
+                    urls = ClassLoader.getSystemResources(fileName);
+                }
+                //如果加载到 调用loadResource方法加载该资源
+                if (urls != null) {
+                    while (urls.hasMoreElements()) {
+                        java.net.URL resourceURL = urls.nextElement();
+                        loadResource(extensionClasses, classLoader, resourceURL);
+                    }
+                }
+            } catch (Throwable t) {
+                logger.error("Exception when load extension class(interface: " +
+                        type + ", description file: " + fileName + ").", t);
+            }
+        }
+    ```
+
+    在`loadResource`方法中调用`loadClass（）`方法加载改文件中的所有类
+
+    该文件的内容一般为
+
+    ```properties
+    filter=com.alibaba.dubbo.rpc.protocol.ProtocolFilterWrapper
+    listener=com.alibaba.dubbo.rpc.protocol.ProtocolListenerWrapper
+    mock=com.alibaba.dubbo.rpc.support.MockProtocol
+    dubbo=com.alibaba.dubbo.rpc.protocol.dubbo.DubboProtocol
+    injvm=com.alibaba.dubbo.rpc.protocol.injvm.InjvmProtocol
+    rmi=com.alibaba.dubbo.rpc.protocol.rmi.RmiProtocol
+    hessian=com.alibaba.dubbo.rpc.protocol.hessian.HessianProtocol
+    com.alibaba.dubbo.rpc.protocol.http.HttpProtocol
+    com.alibaba.dubbo.rpc.protocol.webservice.WebServiceProtocol
+    thrift=com.alibaba.dubbo.rpc.protocol.thrift.ThriftProtocol
+    memcached=com.alibaba.dubbo.rpc.protocol.memcached.MemcachedProtocol
+    redis=com.alibaba.dubbo.rpc.protocol.redis.RedisProtocol
+    rest=com.alibaba.dubbo.rpc.protocol.rest.RestProtocol
+    registry=com.alibaba.dubbo.registry.integration.RegistryProtocol
+    qos=com.alibaba.dubbo.qos.protocol.QosProtocolWrapper
     
+    ```
+
+
+
+    ```java
+    private void loadResource(Map<String, Class<?>> extensionClasses, ClassLoader classLoader, java.net.URL resourceURL) {
+            try {
+                BufferedReader reader = new BufferedReader(new InputStreamReader(resourceURL.openStream(), "utf-8"));
+                try {
+                    String line;
+                    //这里读取文件中的每一行记录
+                    while ((line = reader.readLine()) != null) {
+                        final int ci = line.indexOf('#');
+                        if (ci >= 0) line = line.substring(0, ci);
+                        line = line.trim();
+                        if (line.length() > 0) {
+                            try {
+                                String name = null;
+                                int i = line.indexOf('=');
+                                if (i > 0) {
+                                    name = line.substring(0, i).trim();
+                                    //这里line形如com.alibaba.dubbo.rpc.protocol.ProtocolFilterWrapper
+                                    line = line.substring(i + 1).trim();
+                                }
+                                if (line.length() > 0) {
+                                    //调用方法处理读取的类全名
+                                    loadClass(extensionClasses, resourceURL, Class.forName(line, true, classLoader), name);
+                                }
+                            } catch (Throwable t) {
+                                IllegalStateException e = new IllegalStateException("Failed to load extension class(interface: " + type + ", class line: " + line + ") in " + resourceURL + ", cause: " + t.getMessage(), t);
+                                exceptions.put(line, e);
+                            }
+                        }
+                    }
+                } finally {
+                    reader.close();
+                }
+            } catch (Throwable t) {
+                logger.error("Exception when load extension class(interface: " +
+                        type + ", class file: " + resourceURL + ") in " + resourceURL, t);
+            }
+        }
+    ```
+
+    下面分析`loadClass()`这个方法
+
+    ```java
+     private void loadClass(Map<String, Class<?>> extensionClasses, java.net.URL resourceURL, Class<?> clazz, String name) throws NoSuchMethodException {
+         //判断传进来的类是否是该扩展点的实现，如果不是就报错
+            if (!type.isAssignableFrom(clazz)) {
+                throw new IllegalStateException("Error when load extension class(interface: " +
+                        type + ", class line: " + clazz.getName() + "), class "
+                        + clazz.getName() + "is not subtype of interface.");
+            }
+         //这里判断@Adaptive注解是否是在类上，如果在类上的话，直接将该类赋值给cachedAdaptiveClass 并结束该流程，这里证明查询到的类是自定义的适配器类，就不走下面的自动生成动态适配器类的逻辑了
+            if (clazz.isAnnotationPresent(Adaptive.class)) {
+                if (cachedAdaptiveClass == null) {
+                    cachedAdaptiveClass = clazz;
+                } else if (!cachedAdaptiveClass.equals(clazz)) {
+                    throw new IllegalStateException("More than 1 adaptive class found: "
+                            + cachedAdaptiveClass.getClass().getName()
+                            + ", " + clazz.getClass().getName());
+                }
+                //判断下是否是包装类 判断方式为 是否存在一个 参数为 type的构造器
+                //如果存在 将该类缓存到cachedWrapperClasses
+            } else if (isWrapperClass(clazz)) {
+                Set<Class<?>> wrappers = cachedWrapperClasses;
+                if (wrappers == null) {
+                    cachedWrapperClasses = new ConcurrentHashSet<Class<?>>();
+                    wrappers = cachedWrapperClasses;
+                }
+                wrappers.add(clazz);
+            } else {
+                clazz.getConstructor();
+                //这里好像没有啥用处了，@Extension注解已经被废弃了
+                if (name == null || name.length() == 0) {
+                    name = findAnnotationName(clazz);
+                    if (name.length() == 0) {
+                        throw new IllegalStateException("No such extension name for the class " + clazz.getName() + " in the config " + resourceURL);
+                    }
+                }
+                String[] names = NAME_SEPARATOR.split(name);
+                //这里判断是否是一个自动激活的扩展点
+                if (names != null && names.length > 0) {
+                    Activate activate = clazz.getAnnotation(Activate.class);
+                    if (activate != null) {
+                        cachedActivates.put(names[0], activate);
+                    }
+                 //缓存 格式 类似key=com.alibaba.dubbo.rpc.protocol.rmi.RmiProtocol
+                   // value=rmi
+                    for (String n : names) {
+                        if (!cachedNames.containsKey(clazz)) {
+                            cachedNames.put(clazz, n);
+                        }
+                        //这里放入extensionClasses
+                        Class<?> c = extensionClasses.get(n);
+                        if (c == null) {
+                            extensionClasses.put(n, clazz);
+                        } else if (c != clazz) {
+                            throw new IllegalStateException("Duplicate extension " + type.getName() + " name " + n + " on " + c.getName() + " and " + clazz.getName());
+                        }
+                    }
+                }
+            }
+        }
+    ```
+
+
+
+    到这里就调用完成了。总结一下调用过程
+
+
+![1541401128960](dubbo获取扩展点.bmp)
+
+- 服务的发布过程

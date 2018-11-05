@@ -18,6 +18,10 @@ consumer和provider通过invoker机制通过netty进行nio通信。
 
 #### 3、dubbo的一些特性
 
+- 多协议支持
+
+  **支持发布多个协议**
+
 - 多版本支持
 
   通过在provider和consumer配置文件中配置服务版本来获得多版本支持的功能，具体配置如下
@@ -66,7 +70,7 @@ consumer和provider通过invoker机制通过netty进行nio通信。
            */
   ```
 
-  
+
 
   2、通过本地网卡获取
 
@@ -128,7 +132,7 @@ consumer和provider通过invoker机制通过netty进行nio通信。
       />//客户端配置
   ```
 
-  
+
 
   - failsafe 
 
@@ -151,7 +155,7 @@ consumer和provider通过invoker机制通过netty进行nio通信。
   </dubbo:reference>
   ```
 
-  
+
 
   - failfast
     - 立即失败机制，远程调用失败时立即返回错误
@@ -167,7 +171,7 @@ consumer和provider通过invoker机制通过netty进行nio通信。
   
   ```
 
-  
+
 
   - broadcast
     - 广播机制，调用服务的多个发布地址，任意一台报错，返回报错	
@@ -281,9 +285,9 @@ consumer和provider通过invoker机制通过netty进行nio通信。
 
 
     - 这段代码可以分为两个阶段去解读
-
+    
       - 第一个阶段 `ExtensionLoader.getExtensionLoader(Protocol.class)`这里根据传入的类型获取了一个`ExtensionLoder` 类似于工厂模式
-
+    
       - 第二个阶段 根据`ExtensionLoder.getAdaptiveExtension()`获取一个自适应的扩展点。
 
   - 第一阶段 `ExtensionLoader.getExtensionLoader(Protocol.class)`方法源码如下
@@ -377,7 +381,7 @@ consumer和provider通过invoker机制通过netty进行nio通信。
 
 
     `getAdaptiveExtensionClass()`方法内容如下
-
+    
     ```java
     //私有方法
     private Class<?> getAdaptiveExtensionClass() {
@@ -391,9 +395,9 @@ consumer和provider通过invoker机制通过netty进行nio通信。
             return cachedAdaptiveClass = createAdaptiveExtensionClass();
         }
     ```
-
+    
     分析一下`getExtensionClasses();`方法内容
-
+    
     ```java
     //私有方法
     private Map<String, Class<?>> loadExtensionClasses() {
@@ -420,9 +424,9 @@ consumer和provider通过invoker机制通过netty进行nio通信。
             return extensionClasses;
         }
     ```
-
+    
     下面分析一下`loadDirectory`方法，其方法内容如下
-
+    
     ```java
     //私有方法
         private void loadDirectory(Map<String, Class<?>> extensionClasses, String dir) {
@@ -450,11 +454,11 @@ consumer和provider通过invoker机制通过netty进行nio通信。
             }
         }
     ```
-
+    
     在`loadResource`方法中调用`loadClass（）`方法加载改文件中的所有类
-
+    
     该文件的内容一般为
-
+    
     ```properties
     filter=com.alibaba.dubbo.rpc.protocol.ProtocolFilterWrapper
     listener=com.alibaba.dubbo.rpc.protocol.ProtocolListenerWrapper
@@ -515,9 +519,9 @@ consumer和provider通过invoker机制通过netty进行nio通信。
             }
         }
     ```
-
+    
     下面分析`loadClass()`这个方法
-
+    
     ```java
      private void loadClass(Map<String, Class<?>> extensionClasses, java.net.URL resourceURL, Class<?> clazz, String name) throws NoSuchMethodException {
          //判断传进来的类是否是该扩展点的实现，如果不是就报错
@@ -586,4 +590,275 @@ consumer和provider通过invoker机制通过netty进行nio通信。
 
 ![1541401128960](dubbo获取扩展点.bmp)
 
-- 服务的发布过程
+- 服务的发布和注册过程
+
+  dubbo扩展了spring `BeanDefinitionParser``NamespaceHandlerSupport`两个接口实现了基于spring的xml文件解析
+
+  xml文件的解析结果存放于 `ServiceConfig`和`ReferenceConfig`类
+
+  - 服务发布的入口
+
+    serviceBean集成自ServiceConfig 并实现了Spring中的InitializingBean, DisposableBean, ApplicationContextAware, ApplicationListener, BeanNameAware的五个接口
+
+    在serviceBean中重写了InitializingBean中的afterPropertiesSet，这个方法在springBean初始化完成后会被调用。在这个方法的最会调用了SreviceConfig类中的export(); 所以服务发布的入口从这里开始。
+
+    下面是export()方法的内容
+
+    ```java
+    //这是一个同步方法
+    public synchronized void export() {
+            if (provider != null) {
+                if (export == null) {
+                    export = provider.getExport();
+                }
+                if (delay == null) {
+                    delay = provider.getDelay();
+                }
+            }
+            if (export != null && ! export.booleanValue()) {
+                return;
+            }
+        //延迟启动简单粗暴 直接线程sleep搞定，无论是否delay 都会调用doExport();方法
+            if (delay != null && delay > 0) {
+                Thread thread = new Thread(new Runnable() {
+                    public void run() {
+                        try {
+                            Thread.sleep(delay);
+                        } catch (Throwable e) {
+                        }
+                        doExport();
+                    }
+                });
+                thread.setDaemon(true);
+                thread.setName("DelayExportServiceThread");
+                thread.start();
+            } else {
+                doExport();
+            }
+        }
+    ```
+
+    下面看一下`doExport();`方法的部分内容
+
+    ```java
+    protected synchronized void doExport() {
+           .........more code
+               //在方法的最后调用了这个方法
+            doExportUrls();
+        }
+    ```
+
+    `doExportUrls();`
+
+    ```java
+     private void doExportUrls() {
+            List<URL> registryURLs = loadRegistries(true);//获得注册中心的配置
+            for (ProtocolConfig protocolConfig : protocols) { //支持多协议发布
+                //这里循环去发布多个协议
+                doExportUrlsFor1Protocol(protocolConfig, registryURLs);
+            }
+        }
+    ```
+
+    `doExportUrlsFor1Protocol`
+
+    ```java
+    //通过proxyFactory来获取Invoker对象
+    Invoker<?> invoker = proxyFactory.getInvoker(ref, (Class) interfaceClass, registryURL.addParameterAndEncoded(Constants.EXPORT_KEY, url.toFullString()));
+    //注册服务,
+    Exporter<?> exporter = protocol.export(invoker);
+    //将exporter添加到list中
+    exporters.add(exporter);
+    ```
+
+    代码中protocol是一个动态适配器 其定义如下
+
+    ```java
+    private static final Protocol protocol = ExtensionLoader.
+                getExtensionLoader(Protocol.class).
+                getAdaptiveExtension(); //Protocol$Adaptive
+    ```
+
+    由上面的代码分析可知此处protocol是一个名为Protocol$Adaptive的动态适配器
+
+    这里调用的是Protocol$Adaptive中的export方法，传入的参数为 invoker 此处得到的是服务的发布地址协议 invoker中的Url协议头为registry，由Protocol$Adaptive中export方法中调用逻辑为
+
+    ```java
+    ExtensionLoader.getExtensionLoader(Protocol.class).getExtension("registry").export();
+    ```
+
+    这里调用的是 RegistryProtocol中的export方法
+
+    **这里分析一下这个方法`ExtensionLoader.getExtensionLoader(Protocol.class).getExtension("registry")`**
+
+    `getExtension()`中的`createExtension(name)`主要看一下这个方法的实现
+
+    ```java
+    private T createExtension(String name) {
+        //这里在缓中去扩展点的class
+            Class<?> clazz = getExtensionClasses().get(name);//"dubbo"  clazz=DubboProtocol
+            if (clazz == null) {
+                throw findException(name);
+            }
+            try {
+                //将扩展点的实例放入缓存
+                T instance = (T) EXTENSION_INSTANCES.get(clazz);
+                if (instance == null) {
+                    EXTENSION_INSTANCES.putIfAbsent(clazz, (T) clazz.newInstance());
+                    instance = (T) EXTENSION_INSTANCES.get(clazz);
+                }
+                injectExtension(instance);
+                //这里讲获得的扩展点循环装饰 例如 filterWrapper(listenerWrapper(扩展点))
+                Set<Class<?>> wrapperClasses = cachedWrapperClasses;
+                if (wrapperClasses != null && wrapperClasses.size() > 0) {
+                    for (Class<?> wrapperClass : wrapperClasses) {
+                        instance = injectExtension((T) wrapperClass.getConstructor(type).newInstance(instance));
+                    }
+                }
+                return instance;
+            } catch (Throwable t) {
+                throw new IllegalStateException("Extension instance(name: " + name + ", class: " +
+                        type + ")  could not be instantiated: " + t.getMessage(), t);
+            }
+        }
+    ```
+
+
+
+    ```java
+    public <T> Exporter<T> export(final Invoker<T> originInvoker) throws RpcException {
+            //export invoker 暴露服务的方法
+            final ExporterChangeableWrapper<T> exporter = doLocalExport(originInvoker);
+            //registry provider 注册服务的方法
+            final Registry registry = getRegistry(originInvoker);
+            //得到需要注册到zk上的协议地址，也就是dubbo://
+            final URL registedProviderUrl = getRegistedProviderUrl(originInvoker);
+            registry.register(registedProviderUrl);
+            // 订阅override数据
+            // FIXME 提供者订阅时，会影响同一JVM即暴露服务，又引用同一服务的的场景，因为subscribed以服务名为缓存的key，导致订阅信息覆盖。
+            final URL overrideSubscribeUrl = getSubscribedOverrideUrl(registedProviderUrl);
+            final OverrideListener overrideSubscribeListener = new OverrideListener(overrideSubscribeUrl);
+            overrideListeners.put(overrideSubscribeUrl, overrideSubscribeListener);
+            registry.subscribe(overrideSubscribeUrl, overrideSubscribeListener);
+            //保证每次export都返回一个新的exporter实例
+            return new Exporter<T>() {
+                public Invoker<T> getInvoker() {
+                    return exporter.getInvoker();
+                }
+                public void unexport() {
+                	try {
+                		exporter.unexport();
+                	} catch (Throwable t) {
+                    	logger.warn(t.getMessage(), t);
+                    }
+                    try {
+                    	registry.unregister(registedProviderUrl);
+                    } catch (Throwable t) {
+                    	logger.warn(t.getMessage(), t);
+                    }
+                    try {
+                    	overrideListeners.remove(overrideSubscribeUrl);
+                    	registry.unsubscribe(overrideSubscribeUrl, overrideSubscribeListener);
+                    } catch (Throwable t) {
+                    	logger.warn(t.getMessage(), t);
+                    }
+                }
+            };
+        }
+    ```
+
+    `doLocalExport`
+
+    ```java
+     private <T> ExporterChangeableWrapper<T>  doLocalExport(final Invoker<T> originInvoker){
+            String key = getCacheKey(originInvoker);
+            ExporterChangeableWrapper<T> exporter = (ExporterChangeableWrapper<T>) bounds.get(key);
+            if (exporter == null) {
+                synchronized (bounds) {
+                    exporter = (ExporterChangeableWrapper<T>) bounds.get(key);
+                    if (exporter == null) {
+                        final Invoker<?> invokerDelegete = new InvokerDelegete<T>(originInvoker, getProviderUrl(originInvoker));
+    //在这里暴露服务
+    exporter = new ExporterChangeableWrapper<T((Exporter<T>)protocol.export(invokerDelegete), originInvoker);
+                        bounds.put(key, exporter);
+                    }
+                }
+            }
+            return (ExporterChangeableWrapper<T>) exporter;
+        }
+    ```
+
+    分析下暴露服务的protocol
+
+    ```java
+    private Protocol protocol;
+    
+    public void setProtocol(Protocol protocol) {
+        this.protocol = protocol;
+    }
+    
+    ```
+
+    这里的protocol 应该是初始化时自动注入的，根据dubbo获取扩展点的规则，这里注入的对象应该为
+
+    protocol$adaptive,传入的invokerDelegete为dubbo开头的协议，所以这个方法应该最终调用的是DubboProtocol，但是由于这里在getExtension(name)中会经过包装，这里的实际对象应该为
+
+    ProtocolFilterWrapper(ProtocolListenerWrapper(DubboProtocol)),这里是一个链式调用，首先会经过FilterWrapper的处理，其次经过ListenerWrapper的处理，最后在调用DubboProtocol的export方法。
+
+    FilterWrapper中有很多Filter的扩展点，通过filter增加了很多dubbo服务调用时的非业务性功能
+
+    ```properties
+    echo=com.alibaba.dubbo.rpc.filter.EchoFilter
+    generic=com.alibaba.dubbo.rpc.filter.GenericFilter
+    genericimpl=com.alibaba.dubbo.rpc.filter.GenericImplFilter
+    token=com.alibaba.dubbo.rpc.filter.TokenFilter
+    accesslog=com.alibaba.dubbo.rpc.filter.AccessLogFilter
+    activelimit=com.alibaba.dubbo.rpc.filter.ActiveLimitFilter
+    classloader=com.alibaba.dubbo.rpc.filter.ClassLoaderFilter
+    context=com.alibaba.dubbo.rpc.filter.ContextFilter
+    consumercontext=com.alibaba.dubbo.rpc.filter.ConsumerContextFilter
+    exception=com.alibaba.dubbo.rpc.filter.ExceptionFilter
+    executelimit=com.alibaba.dubbo.rpc.filter.ExecuteLimitFilter
+    deprecated=com.alibaba.dubbo.rpc.filter.DeprecatedFilter
+    compatible=com.alibaba.dubbo.rpc.filter.CompatibleFilter
+    timeout=com.alibaba.dubbo.rpc.filter.TimeoutFilter
+    ```
+
+    ListenerWrapper有一个过滤废弃服务的实现,通过判断dubbo配置参数上的deprecated**标记实现**
+
+    ```properties
+    deprecated=com.alibaba.dubbo.rpc.listener.DeprecatedInvokerListener
+    ```
+
+    `DubboProtocol中的`export()
+
+  ```java
+  public <T> Exporter<T> export(Invoker<T> invoker) throws RpcException {
+          URL url = invoker.getUrl();
+          
+          // export service.
+          String key = serviceKey(url);
+          DubboExporter<T> exporter = new DubboExporter<T>(invoker, key, exporterMap);
+          exporterMap.put(key, exporter);
+  
+          //export an stub service for dispaching event
+          Boolean isStubSupportEvent = url.getParameter(Constants.STUB_EVENT_KEY,Constants.DEFAULT_STUB_EVENT);
+          Boolean isCallbackservice = url.getParameter(Constants.IS_CALLBACK_SERVICE, false);
+          if (isStubSupportEvent && !isCallbackservice){
+              String stubServiceMethods = url.getParameter(Constants.STUB_EVENT_METHODS_KEY);
+              if (stubServiceMethods == null || stubServiceMethods.length() == 0 ){
+                  if (logger.isWarnEnabled()){
+                      logger.warn(new IllegalStateException("consumer [" +url.getParameter(Constants.INTERFACE_KEY) +
+                              "], has set stubproxy support event ,but no stub methods founded."));
+                  }
+              } else {
+                  stubServiceMethodsMap.put(url.getServiceKey(), stubServiceMethods);
+              }
+          }
+  		
+      //这里启动服务，默认Netty方式
+          openServer(url);
+          
+          return exporter;
+      }
+  ```
